@@ -1,7 +1,7 @@
 name: Compare Files and Generate Diff HTML
 
 on:
-  workflow_dispatch:  # allows manual triggering
+  workflow_dispatch:
 
 jobs:
   compare-files:
@@ -20,28 +20,43 @@ jobs:
           ref: Test
           path: test_branch
 
-      - name: Clean files by removing specified tags
+      - name: Show files for debugging
         run: |
-          TAGS="<MCSCRIPTSTATUS>|<TASKCHANGED>|<MCVERSION>|<ERRLOG>|<ERRFUNCTION>|<SNMPREMOTEHOST>"
-          
-          # Remove tags from Development branch file
+          echo "Development branch file content:"
+          head -20 dev_branch/comsapitnewpackage5.idmpck || echo "File not found"
+          echo "Test branch file content:"
+          head -20 test_branch/comsapitnewpackage5.idmpck || echo "File not found"
+
+      - name: Remove specified tags from files
+        run: |
+          # Tags to remove
+          TAGS="MCSCRIPTSTATUS|TASKCHANGED|MCVERSION|ERRLOG|ERRFUNCTION|SNMPREMOTEHOST"
+
+          # Remove tags including their closing tags (handle both opening and closing)
           sed -E "s#</?($TAGS)>##g" dev_branch/comsapitnewpackage5.idmpck > dev_clean.txt
-          
-          # Remove tags from Test branch file
           sed -E "s#</?($TAGS)>##g" test_branch/comsapitnewpackage5.idmpck > test_clean.txt
 
-      - name: Generate diff output as HTML
+          echo "Cleaned Development file preview:"
+          head -20 dev_clean.txt
+          echo "Cleaned Test file preview:"
+          head -20 test_clean.txt
+
+      - name: Install diff2html-cli
         run: |
-          # Install diff2html-cli for HTML diff output
+          if ! command -v npm > /dev/null; then
+            echo "ERROR: npm is not installed. Please install nodejs and npm on runner."
+            exit 1
+          fi
           npm install -g diff2html-cli
-          
-          # Generate unified diff file
+
+      - name: Generate diff and convert to HTML
+        run: |
           diff -u dev_clean.txt test_clean.txt > diff_output.diff || true
-          
-          # Convert diff to HTML
+          echo "Diff file preview:"
+          head -20 diff_output.diff || echo "Diff is empty"
+
           diff2html -i file -s side -F diff_output.html diff_output.diff
-          
-          # Show generated file size
+          echo "Generated HTML diff report:"
           ls -lh diff_output.html
 
       - name: Upload diff HTML artifact
