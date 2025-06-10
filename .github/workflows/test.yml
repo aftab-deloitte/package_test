@@ -1,3 +1,67 @@
+name: Generate HTML Diff Between Branches
+on:
+  push:
+    branches:
+      - main  # Trigger only when pushing to the compare branch
+
+jobs:
+  html-diff:
+    runs-on: [ linux ]
+    env:
+      BASE_BRANCH: Test
+      COMPARE_BRANCH: Development
+      FILE_PATH: comsapitnewpackage5.idmpck
+
+    steps:
+      - name: Checkout compare branch (Development)
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 1
+          ref: ${{ env.COMPARE_BRANCH }}
+
+      - name: Checkout base branch (Test)
+        uses: actions/checkout@v3
+        with:
+          ref: ${{ env.BASE_BRANCH }}
+          path: base-branch
+          fetch-depth: 1
+
+      - name: Fetch file from base branch (Test)
+        run: |
+          cat base-branch/${FILE_PATH} > base.tmp
+      - name: Copy compare branch file
+        run: |
+          cp $FILE_PATH compare.tmp
+      - name: Clean files by removing specified XML-style tags
+        run: |
+          for tag in "PACKAGE_SCRIPTS" "CHANGED_DATE" "MCSCRIPTSTATUS" "TASKCHANGED" "MCVERSION" "ERRLOG" "ERRFUNCTION" "MCFROMREFERENCE" "SNMPREMOTEHOST"; do
+            sed -i "/<${tag}>.*<\/${tag}>/d" base.tmp
+            sed -i "/<${tag}\/>/d" base.tmp
+            sed -i "/<${tag}>/d" base.tmp
+            sed -i "/<\/${tag}>/d" base.tmp
+            
+            sed -i "/<${tag}>.*<\/${tag}>/d" compare.tmp
+            sed -i "/<${tag}\/>/d" compare.tmp
+            sed -i "/<${tag}>/d" compare.tmp
+            sed -i "/<\/${tag}>/d" compare.tmp
+          done
+      - name: Generate diff.html via vimdiff
+        run: |
+          vimdiff base.tmp compare.tmp << 'EOF'
+          :TOhtml
+          :w! diff.html
+          :qa!
+          EOF
+          sed -i 's/\.DiffAdd\s*{[^}]*}/.DiffAdd { background-color: #ccffcc; color: #000000; padding-bottom: 1px; }/' diff.html
+          sed -i 's/\.DiffDelete\s*{[^}]*}/.DiffDelete { background-color: #ffcccc; color: #000000; padding-bottom: 1px; font-weight: bold; }/' diff.html
+          sed -i 's/\.DiffChange\s*{[^}]*}/.DiffChange { background-color: #ffffcc; color: #000000; padding-bottom: 1px; }/' diff.html
+          sed -i 's/\.DiffText\s*{[^}]*}/.DiffText { background-color: #ff6666; color: #000000; padding-bottom: 1px; font-weight: bold; }/' diff.html
+      - name: Upload HTML diff
+        uses: actions/upload-artifact@v3
+        with:
+          name: html-diff
+          path: diff.html
+
 name: Compare Files and Generate Diff HTML
 
 on:
