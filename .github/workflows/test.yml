@@ -61,3 +61,70 @@ jobs:
         with:
           name: html-diff
           path: diff.html
+
+name: Compare Files and Generate Diff HTML
+
+on:
+  workflow_dispatch:
+
+jobs:
+  compare-files:
+    runs-on: self-hosted
+    name: Compare comsapitnewpackage5.idmpck in Development and Test branches
+    steps:
+      - name: Checkout Development branch
+        uses: actions/checkout@v3
+        with:
+          ref: Development
+          path: dev_branch
+
+      - name: Checkout Test branch
+        uses: actions/checkout@v3
+        with:
+          ref: Test
+          path: test_branch
+
+      - name: Show files for debugging
+        run: |
+          echo "Development branch file content:"
+          head -20 dev_branch/comsapitnewpackage5.idmpck || echo "File not found"
+          echo "Test branch file content:"
+          head -20 test_branch/comsapitnewpackage5.idmpck || echo "File not found"
+
+      - name: Remove specified tags from files
+        run: |
+          # Tags to remove
+          TAGS="MCSCRIPTSTATUS|TASKCHANGED|MCVERSION|ERRLOG|ERRFUNCTION|SNMPREMOTEHOST"
+
+          # Remove tags including their closing tags (handle both opening and closing)
+          sed -E "s#</?($TAGS)>##g" dev_branch/comsapitnewpackage5.idmpck > dev_clean.txt
+          sed -E "s#</?($TAGS)>##g" test_branch/comsapitnewpackage5.idmpck > test_clean.txt
+
+          echo "Cleaned Development file preview:"
+          head -20 dev_clean.txt
+          echo "Cleaned Test file preview:"
+          head -20 test_clean.txt
+
+      - name: Install diff2html-cli
+        run: |
+          if ! command -v npm > /dev/null; then
+            echo "ERROR: npm is not installed. Please install nodejs and npm on runner."
+            exit 1
+          fi
+          npm install -g diff2html-cli
+
+      - name: Generate diff and convert to HTML
+        run: |
+          diff -u dev_clean.txt test_clean.txt > diff_output.diff || true
+          echo "Diff file preview:"
+          head -20 diff_output.diff || echo "Diff is empty"
+
+          diff2html -i file -s side -F diff_output.html diff_output.diff
+          echo "Generated HTML diff report:"
+          ls -lh diff_output.html
+
+      - name: Upload diff HTML artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: diff-html-report
+          path: diff_output.html
