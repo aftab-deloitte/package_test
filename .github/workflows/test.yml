@@ -1,130 +1,136 @@
-name: Generate HTML Diff Between Branches
-on:
-  push:
-    branches:
-      - main  # Trigger only when pushing to the compare branch
-
-jobs:
-  html-diff:
-    runs-on: [ linux ]
-    env:
-      BASE_BRANCH: Test
-      COMPARE_BRANCH: Development
-      FILE_PATH: comsapitnewpackage5.idmpck
-
-    steps:
-      - name: Checkout compare branch (Development)
-        uses: actions/checkout@v3
-        with:
-          fetch-depth: 1
-          ref: ${{ env.COMPARE_BRANCH }}
-
-      - name: Checkout base branch (Test)
-        uses: actions/checkout@v3
-        with:
-          ref: ${{ env.BASE_BRANCH }}
-          path: base-branch
-          fetch-depth: 1
-
-      - name: Fetch file from base branch (Test)
-        run: |
-          cat base-branch/${FILE_PATH} > base.tmp
-      - name: Copy compare branch file
-        run: |
-          cp $FILE_PATH compare.tmp
-      - name: Clean files by removing specified XML-style tags
-        run: |
-          for tag in "PACKAGE_SCRIPTS" "CHANGED_DATE" "MCSCRIPTSTATUS" "TASKCHANGED" "MCVERSION" "ERRLOG" "ERRFUNCTION" "MCFROMREFERENCE" "SNMPREMOTEHOST"; do
-            sed -i "/<${tag}>.*<\/${tag}>/d" base.tmp
-            sed -i "/<${tag}\/>/d" base.tmp
-            sed -i "/<${tag}>/d" base.tmp
-            sed -i "/<\/${tag}>/d" base.tmp
-            
-            sed -i "/<${tag}>.*<\/${tag}>/d" compare.tmp
-            sed -i "/<${tag}\/>/d" compare.tmp
-            sed -i "/<${tag}>/d" compare.tmp
-            sed -i "/<\/${tag}>/d" compare.tmp
-          done
-      - name: Generate diff.html via vimdiff
-        run: |
-          vimdiff base.tmp compare.tmp << 'EOF'
-          :TOhtml
-          :w! diff.html
-          :qa!
-          EOF
-          sed -i 's/\.DiffAdd\s*{[^}]*}/.DiffAdd { background-color: #ccffcc; color: #000000; padding-bottom: 1px; }/' diff.html
-          sed -i 's/\.DiffDelete\s*{[^}]*}/.DiffDelete { background-color: #ffcccc; color: #000000; padding-bottom: 1px; font-weight: bold; }/' diff.html
-          sed -i 's/\.DiffChange\s*{[^}]*}/.DiffChange { background-color: #ffffcc; color: #000000; padding-bottom: 1px; }/' diff.html
-          sed -i 's/\.DiffText\s*{[^}]*}/.DiffText { background-color: #ff6666; color: #000000; padding-bottom: 1px; font-weight: bold; }/' diff.html
-      - name: Upload HTML diff
-        uses: actions/upload-artifact@v3
-        with:
-          name: html-diff
-          path: diff.html
-
-name: Compare Files and Generate Diff HTML
+name: Package Diff Workflow
 
 on:
   workflow_dispatch:
+    inputs:
+      base_branch:
+        description: 'Base Branch to compare from (Base)'
+        required: true
+        type: choice
+        options: [Development, Test, Production]
+      compare_branch:
+        description: 'Compare Branch to compare against (Target)'
+        required: true
+        type: choice
+        options: [Development, Test, Production]
+      file_path:
+        description: 'Path of file to compare (e.g., src/app/config.idmpck)'
+        required: true
 
 jobs:
-  compare-files:
-    runs-on: self-hosted
-    name: Compare comsapitnewpackage5.idmpck in Development and Test branches
+  chunked-html-diff:
+    runs-on: [linux]
     steps:
-      - name: Checkout Development branch
+      - name: Checkout compare branch
         uses: actions/checkout@v3
         with:
-          ref: Development
-          path: dev_branch
+          ref: ${{ inputs.compare_branch }}
+          fetch-depth: 1
 
-      - name: Checkout Test branch
+      - name: Checkout base branch
         uses: actions/checkout@v3
         with:
-          ref: Test
-          path: test_branch
+          ref: ${{ inputs.base_branch }}
+          path: base
+          fetch-depth: 1
 
-      - name: Show files for debugging
+      - name: Prepare cleaned files
         run: |
-          echo "Development branch file content:"
-          head -20 dev_branch/comsapitnewpackage5.idmpck || echo "File not found"
-          echo "Test branch file content:"
-          head -20 test_branch/comsapitnewpackage5.idmpck || echo "File not found"
+          mkdir cleaned
+          cp ${{ inputs.file_path }} cleaned/compare.xml
+          cp base/${{ inputs.file_path }} cleaned/base.xml
 
-      - name: Remove specified tags from files
+          for tag in PACKAGE_SCRIPTS CHANGED_DATE MCSCRIPTSTATUS TASKCHANGED MCVERSION ERRLOG ERRFUNCTION SNMPREMOTEHOST; do
+            for file in cleaned/base.xml cleaned/compare.xml; do
+              sed -i "/<${tag}>.*<\/${tag}>/d" "$file"
+              sed -i "/<${tag}\/>/d" "$file"
+              sed -i "/<${tag}>/d" "$file"
+              sed -i "/<\/${tag}>/d" "$file"
+            done
+          done
+
+      - name: Generate chunked HTML diff with nav buttons
         run: |
-          # Tags to remove
-          TAGS="MCSCRIPTSTATUS|TASKCHANGED|MCVERSION|ERRLOG|ERRFUNCTION|SNMPREMOTEHOST"
+          pip install --quiet chardet
 
-          # Remove tags including their closing tags (handle both opening and closing)
-          sed -E "s#</?($TAGS)>##g" dev_branch/comsapitnewpackage5.idmpck > dev_clean.txt
-          sed -E "s#</?($TAGS)>##g" test_branch/comsapitnewpackage5.idmpck > test_clean.txt
+          cat << 'EOF' > diff.py
+import html, os
 
-          echo "Cleaned Development file preview:"
-          head -20 dev_clean.txt
-          echo "Cleaned Test file preview:"
-          head -20 test_clean.txt
+def read_file(path):
+    with open(path, encoding="utf-8", errors="ignore") as f:
+        return f.readlines()
 
-      - name: Install diff2html-cli
-        run: |
-          if ! command -v npm > /dev/null; then
-            echo "ERROR: npm is not installed. Please install nodejs and npm on runner."
-            exit 1
-          fi
-          npm install -g diff2html-cli
+def escape_lines(lines):
+    return [html.escape(line.rstrip('\n')) for line in lines]
 
-      - name: Generate diff and convert to HTML
-        run: |
-          diff -u dev_clean.txt test_clean.txt > diff_output.diff || true
-          echo "Diff file preview:"
-          head -20 diff_output.diff || echo "Diff is empty"
+def generate_chunks(lines_a, lines_b, lines_per_chunk=8000):
+    chunks = []
+    max_len = max(len(lines_a), len(lines_b))
+    for i in range(0, max_len, lines_per_chunk):
+        chunk_a = lines_a[i:i+lines_per_chunk]
+        chunk_b = lines_b[i:i+lines_per_chunk]
+        chunks.append((chunk_a, chunk_b, i//lines_per_chunk))
+    return chunks
 
-          diff2html -i file -s side -F diff_output.html diff_output.diff
-          echo "Generated HTML diff report:"
-          ls -lh diff_output.html
+def align_lines(a, b):
+    max_len = max(len(a), len(b))
+    a += [''] * (max_len - len(a))
+    b += [''] * (max_len - len(b))
+    return a, b
 
-      - name: Upload diff HTML artifact
+def to_html(a_lines, b_lines, chunk_id, total_chunks):
+    html_output = [f"<html><head><style>",
+        "body { font-family: monospace; }",
+        "table { border-collapse: collapse; width: 100%; }",
+        "td { vertical-align: top; padding: 2px; white-space: pre; }",
+        ".same { background-color: #f0f0f0; }",
+        ".diff-a { background-color: #ffecec; }",
+        ".diff-b { background-color: #e6ffe6; }",
+        "button { margin: 10px; padding: 8px; font-size: 14px; }",
+        "</style></head><body>",
+        f"<h3>Chunk {chunk_id+1} of {total_chunks}</h3>",
+        "<table>"]
+
+    a_lines, b_lines = align_lines(a_lines, b_lines)
+    for a, b in zip(a_lines, b_lines):
+        if a == b:
+            html_output.append(f"<tr><td class='same'>{a}</td><td class='same'>{b}</td></tr>")
+        else:
+            html_output.append(f"<tr><td class='diff-a'>{a}</td><td class='diff-b'>{b}</td></tr>")
+    html_output.append("</table>")
+
+    # Navigation buttons
+    nav = []
+    if chunk_id > 0:
+        nav.append(f'<a href="chunk_{chunk_id - 1}.html"><button>&larr; Previous</button></a>')
+    if chunk_id < total_chunks - 1:
+        nav.append(f'<a href="chunk_{chunk_id + 1}.html"><button>Next &rarr;</button></a>')
+    html_output.append("<div>" + " ".join(nav) + "</div>")
+
+    html_output.append("</body></html>")
+    return "\n".join(html_output)
+
+base = escape_lines(read_file("cleaned/base.xml"))
+compare = escape_lines(read_file("cleaned/compare.xml"))
+chunks = generate_chunks(base, compare)
+total = len(chunks)
+
+os.makedirs("html_chunks", exist_ok=True)
+for a_chunk, b_chunk, cid in chunks:
+    with open(f"html_chunks/chunk_{cid}.html", "w", encoding="utf-8") as f:
+        f.write(to_html(a_chunk, b_chunk, cid, total))
+
+with open("html_chunks/index.html", "w", encoding="utf-8") as idx:
+    idx.write("<html><body><h2>Diff Chunks</h2><ul>")
+    for _, _, cid in chunks:
+        idx.write(f'<li><a href="chunk_{cid}.html">Chunk {cid+1}</a></li>')
+    idx.write("</ul></body></html>")
+EOF
+
+          python3 diff.py
+
+      - name: Upload HTML diff chunks
         uses: actions/upload-artifact@v3
         with:
-          name: diff-html-report
-          path: diff_output.html
+          name: html-diff
+          path: html_chunks/
